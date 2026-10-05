@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { isAddress, type Address } from 'viem';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { isAddress, parseUnits, parseEther, type Address } from 'viem';
 import {
   Globe,
   Wallet,
@@ -11,19 +11,26 @@ import {
   CheckCircle2,
   Loader2,
   ArrowUpRight,
-  Settings2,
+  Fuel,
+  PlusCircle,
+  Coins,
+  Zap,
+  CheckSquare,
+  Square,
+  X,
 } from 'lucide-react';
 import { Header } from './components/Header';
 import {
   connectWallet,
   fetchBalances,
+  fetchCustomTokenMetadata,
   switchWalletNetwork,
   executeSweep,
   getNetwork,
 } from './services/recoveryService';
 import { SUPPORTED_NETWORKS, getZeroDevBundlerUrl, ENTRY_POINT_0_7, ZERODEV_PROJECT_ID } from './constants/networks';
 import { parseMetaMaskError, type FormattedError } from './utils/parseMetamaskError';
-import type { AccountBalances, AssetType, GasMode, SweepResult, SweepStep } from './types';
+import type { AccountBalances, GasMode, SweepItem, SweepMode, SweepResult, SweepStep, TokenItem } from './types';
 
 // Dynamic initial state helpers supporting Query Params, Hash Fragments, and Pre-baked Offline configs
 function getInitialChainId(): number {
@@ -86,19 +93,65 @@ function getInitialSmartAccount(): string {
   return '';
 }
 
+function getInitialTokens(): Address[] {
+  if (typeof window === 'undefined') return [];
+  const addrs: Address[] = [];
+
+  // 1. Injected configuration
+  const preConfig = (window as unknown as { __ORKI_RECOVERY_CONFIG__?: { tokens?: string[] } }).__ORKI_RECOVERY_CONFIG__;
+  if (Array.isArray(preConfig?.tokens)) {
+    for (const t of preConfig.tokens) {
+      if (typeof t === 'string' && isAddress(t.trim())) {
+        addrs.push(t.trim() as Address);
+      }
+    }
+  }
+
+  // 2. Query param ?tokens=0x...,0x...
+  const urlParams = new URLSearchParams(window.location.search);
+  const fromQuery = urlParams.get('tokens');
+  if (fromQuery) {
+    fromQuery.split(',').forEach((t) => {
+      const trimmed = t.trim();
+      if (isAddress(trimmed)) addrs.push(trimmed as Address);
+    });
+  }
+
+  // 3. Hash param
+  if (window.location.hash) {
+    const rawHash = window.location.hash.replace(/^#\/?/, '').trim();
+    const hashParams = new URLSearchParams(rawHash.includes('?') ? rawHash.split('?')[1] : rawHash);
+    const fromHash = hashParams.get('tokens');
+    if (fromHash) {
+      fromHash.split(',').forEach((t) => {
+        const trimmed = t.trim();
+        if (isAddress(trimmed)) addrs.push(trimmed as Address);
+      });
+    }
+  }
+
+  const unique = Array.from(new Set(addrs.map((a) => a.toLowerCase())));
+  return unique.map((a) => a as Address);
+}
+
 export function App() {
   // Network state: dynamically initialized from URL or first configured network
   const [selectedChainId, setSelectedChainId] = useState<number>(getInitialChainId);
   const currentNetwork = getNetwork(selectedChainId);
 
-  // ZeroDev Project ID: hardcoded default in constants/networks.ts
-  const zerodevProjectId = ZERODEV_PROJECT_ID;
 
-  // Gas mode: defaults to 'paymaster'
-  const [gasMode, setGasMode] = useState<GasMode>('paymaster');
+  // Gas mode: always self-funded native gas (Orki does not sponsor gas)
+  const gasMode: GasMode = 'native';
 
   // Smart Account Address state: dynamically initialized from URL or starts empty
   const [smartAccountAddress, setSmartAccountAddress] = useState<string>(getInitialSmartAccount);
+
+  // Extra custom/injected token addresses
+  const [extraTokens, setExtraTokens] = useState<Address[]>(getInitialTokens);
+  const [customTokenInput, setCustomTokenInput] = useState('');
+  const [isAddingToken, setIsAddingToken] = useState(false);
+  const [customTokenError, setCustomTokenError] = useState<string | null>(null);
+  const [showCustomTokenBox, setShowCustomTokenBox] = useState(false);
 
   // Wallet / Signer state
   const [signerAddress, setSignerAddress] = useState<Address | null>(null);
@@ -110,19 +163,29 @@ export function App() {
     return getZeroDevBundlerUrl(chainId, ZERODEV_PROJECT_ID);
   }, []);
 
+  // Compute default RPC URL (ZeroDev RPC provides full Node RPC + CORS support across all chains)
+  const computeDefaultRpcUrl = useCallback((chainId: number) => {
+    const zd = getZeroDevBundlerUrl(chainId, ZERODEV_PROJECT_ID);
+    if (zd) return zd;
+    return getNetwork(chainId).rpcUrl;
+  }, []);
+
   // Endpoints
-  const [rpcUrl, setRpcUrl] = useState<string>(currentNetwork.rpcUrl);
+  const [rpcUrl, setRpcUrl] = useState<string>(() => {
+    return computeDefaultRpcUrl(selectedChainId);
+  });
   const [bundlerUrl, setBundlerUrl] = useState<string>(() => {
     return computeDefaultBundlerUrl(selectedChainId);
   });
-
 
   // Balances
   const [balances, setBalances] = useState<AccountBalances | null>(null);
   const [isLoadingBalances, setIsLoadingBalances] = useState<boolean>(false);
 
-  // Sweep configuration: amount starts empty (no hardcoded amount)
-  const [assetType, setAssetType] = useState<AssetType>('USDC');
+  // Recovery Mode & Selection
+  const [sweepMode, setSweepMode] = useState<SweepMode>('batch');
+  const [selectedSingleKey, setSelectedSingleKey] = useState<string>('native');
+  const [batchSelectedKeys, setBatchSelectedKeys] = useState<Set<string>>(new Set());
   const [amount, setAmount] = useState<string>('');
   const [recipientAddress, setRecipientAddress] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -158,18 +221,11 @@ export function App() {
   // Sync RPC and Bundler when chain changes
   const handleSelectChainId = useCallback((chainId: number) => {
     setSelectedChainId(chainId);
-    const net = getNetwork(chainId);
-    setRpcUrl(net.rpcUrl);
+    setRpcUrl(computeDefaultRpcUrl(chainId));
     setBundlerUrl(computeDefaultBundlerUrl(chainId));
     setBalances(null);
-  }, [computeDefaultBundlerUrl]);
+  }, [computeDefaultRpcUrl, computeDefaultBundlerUrl]);
 
-  const handleGasModeChange = (mode: GasMode) => {
-    setGasMode(mode);
-    if (!bundlerUrl) {
-      setBundlerUrl(computeDefaultBundlerUrl(selectedChainId));
-    }
-  };
 
   // Sync URL changes dynamically without page reload
   useEffect(() => {
@@ -181,6 +237,13 @@ export function App() {
       const chain = getInitialChainId();
       if (chain && chain !== selectedChainId) {
         handleSelectChainId(chain);
+      }
+      const tokens = getInitialTokens();
+      if (tokens.length > 0) {
+        setExtraTokens((prev) => {
+          const merged = new Set([...prev.map((p) => p.toLowerCase()), ...tokens.map((t) => t.toLowerCase())]);
+          return Array.from(merged) as Address[];
+        });
       }
     };
 
@@ -201,15 +264,30 @@ export function App() {
         selectedChainId,
         rpcUrl,
         smartAccountAddress as Address,
-        currentNetwork.usdcAddress
+        extraTokens
       );
       setBalances(bals);
+
+      // Initialize batch selection with all tokens that have non-zero balance
+      const withBal = new Set<string>();
+      bals.tokens.forEach((t) => {
+        if (t.balanceRaw > 0n) {
+          withBal.add(t.address ? t.address.toLowerCase() : 'native');
+        }
+      });
+      setBatchSelectedKeys(withBal);
+
+      // Default single token selection
+      const firstWithBal = bals.tokens.find((t) => t.balanceRaw > 0n);
+      if (firstWithBal) {
+        setSelectedSingleKey(firstWithBal.address ? firstWithBal.address.toLowerCase() : 'native');
+      }
     } catch (e) {
       console.warn('Error fetching balances:', e);
     } finally {
       setIsLoadingBalances(false);
     }
-  }, [selectedChainId, rpcUrl, smartAccountAddress, currentNetwork.usdcAddress]);
+  }, [selectedChainId, rpcUrl, smartAccountAddress, extraTokens]);
 
   useEffect(() => {
     let ignore = false;
@@ -222,9 +300,23 @@ export function App() {
           selectedChainId,
           rpcUrl,
           smartAccountAddress as Address,
-          currentNetwork.usdcAddress
+          extraTokens
         );
-        if (!ignore) setBalances(bals);
+        if (!ignore) {
+          setBalances(bals);
+          const withBal = new Set<string>();
+          bals.tokens.forEach((t) => {
+            if (t.balanceRaw > 0n) {
+              withBal.add(t.address ? t.address.toLowerCase() : 'native');
+            }
+          });
+          setBatchSelectedKeys(withBal);
+
+          const firstWithBal = bals.tokens.find((t) => t.balanceRaw > 0n);
+          if (firstWithBal) {
+            setSelectedSingleKey(firstWithBal.address ? firstWithBal.address.toLowerCase() : 'native');
+          }
+        }
       } catch (e) {
         console.warn('Error fetching balances:', e);
       } finally {
@@ -235,7 +327,7 @@ export function App() {
     return () => {
       ignore = true;
     };
-  }, [selectedChainId, rpcUrl, smartAccountAddress, currentNetwork.usdcAddress]);
+  }, [selectedChainId, rpcUrl, smartAccountAddress, extraTokens]);
 
   // Connect Wallet
   const handleConnectWallet = async () => {
@@ -299,17 +391,143 @@ export function App() {
     }
   }, []);
 
-  // Max amount helper
-  const handleMaxAmount = () => {
-    if (!balances) return;
-    if (assetType === 'USDC') {
-      setAmount(balances.usdc || '');
-    } else if (assetType === 'NATIVE') {
-      const num = parseFloat(balances.native || '0');
-      const maxVal = Math.max(0, num - 0.0002);
-      setAmount(maxVal > 0 ? maxVal.toFixed(5) : '0');
+  // Add custom token
+  const handleAddCustomToken = async () => {
+    const raw = customTokenInput.trim();
+    if (!isAddress(raw)) {
+      setCustomTokenError('Please enter a valid 0x hex contract address.');
+      return;
+    }
+    if (!isAddress(smartAccountAddress)) {
+      setCustomTokenError('Provide a valid smart account address first.');
+      return;
+    }
+
+    setIsAddingToken(true);
+    setCustomTokenError(null);
+    try {
+      const token = await fetchCustomTokenMetadata(
+        selectedChainId,
+        rpcUrl,
+        smartAccountAddress as Address,
+        raw as Address
+      );
+      setExtraTokens((prev) => {
+        const existing = new Set(prev.map((p) => p.toLowerCase()));
+        if (!existing.has(raw.toLowerCase())) {
+          return [...prev, raw as Address];
+        }
+        return prev;
+      });
+      setCustomTokenInput('');
+      setShowCustomTokenBox(false);
+      // Immediately include in single or batch
+      setSelectedSingleKey(raw.toLowerCase());
+      if (token.balanceRaw > 0n) {
+        setBatchSelectedKeys((prev) => new Set([...prev, raw.toLowerCase()]));
+      }
+      await loadBalances();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to inspect token contract';
+      setCustomTokenError(msg);
+    } finally {
+      setIsAddingToken(false);
     }
   };
+
+  // Tokens with positive balance
+  const positiveTokens = useMemo(() => {
+    if (!balances?.tokens) return [];
+    return balances.tokens.filter((t) => t.balanceRaw > 0n);
+  }, [balances]);
+
+  // Selected single token object
+  const currentSingleToken = useMemo<TokenItem | undefined>(() => {
+    if (!balances?.tokens) return undefined;
+    return balances.tokens.find((t) => {
+      const key = t.address ? t.address.toLowerCase() : 'native';
+      return key === selectedSingleKey;
+    }) || balances.tokens[0];
+  }, [balances, selectedSingleKey]);
+
+  // Single sweep max amount helper
+  const handleMaxAmount = () => {
+    if (!currentSingleToken) return;
+    if (currentSingleToken.isNative) {
+      const num = parseFloat(currentSingleToken.balance || '0');
+      // If self-funded gas, leave ~0.001 ETH buffer
+      const reserve = gasMode === 'native' ? 0.001 : 0.0001;
+      const maxVal = Math.max(0, num - reserve);
+      setAmount(maxVal > 0 ? maxVal.toFixed(5) : '0');
+    } else {
+      setAmount(currentSingleToken.balance || '0');
+    }
+  };
+
+  // Toggle token in batch selection
+  const handleToggleBatchToken = (key: string) => {
+    setBatchSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllBatch = () => {
+    const allKeys = new Set(positiveTokens.map((t) => (t.address ? t.address.toLowerCase() : 'native')));
+    setBatchSelectedKeys(allKeys);
+  };
+
+  const handleDeselectAllBatch = () => {
+    setBatchSelectedKeys(new Set());
+  };
+
+  // Batch items to sweep
+  const batchSweepItems = useMemo<SweepItem[]>(() => {
+    if (!balances?.tokens) return [];
+    const items: SweepItem[] = [];
+
+    balances.tokens.forEach((token) => {
+      const key = token.address ? token.address.toLowerCase() : 'native';
+      if (!batchSelectedKeys.has(key)) return;
+      if (token.balanceRaw <= 0n) return;
+
+      if (token.isNative) {
+        // Reserve gas buffer if self-funded
+        let effectiveRaw = token.balanceRaw;
+        if (gasMode === 'native') {
+          const gasReserve = 1000000000000000n; // ~0.001 native token
+          effectiveRaw = token.balanceRaw > gasReserve ? token.balanceRaw - gasReserve : 0n;
+        }
+
+        if (effectiveRaw > 0n) {
+          items.push({
+            tokenAddress: null,
+            symbol: token.symbol,
+            decimals: token.decimals,
+            amount: (Number(effectiveRaw) / 1e18).toFixed(5),
+            amountRaw: effectiveRaw,
+            isNative: true,
+          });
+        }
+      } else if (token.address) {
+        items.push({
+          tokenAddress: token.address,
+          symbol: token.symbol,
+          decimals: token.decimals,
+          amount: token.balance,
+          amountRaw: token.balanceRaw,
+          isNative: false,
+        });
+      }
+    });
+
+    return items;
+  }, [balances, batchSelectedKeys, gasMode]);
 
   // Execute Sweep
   const handleExecuteSweep = async () => {
@@ -327,6 +545,44 @@ export function App() {
       return;
     }
 
+    let itemsToSweep: SweepItem[] = [];
+
+    if (sweepMode === 'batch') {
+      if (batchSweepItems.length === 0) {
+        setError('Please select at least one asset with a non-zero balance to sweep.', 'No Assets Selected');
+        return;
+      }
+      itemsToSweep = batchSweepItems;
+    } else {
+      if (!currentSingleToken) {
+        setError('Please select an asset to sweep.', 'No Asset Selected');
+        return;
+      }
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount <= 0) {
+        setError('Please enter a valid amount greater than 0.', 'Invalid Amount');
+        return;
+      }
+
+      let parsedRaw: bigint;
+      if (currentSingleToken.isNative) {
+        parsedRaw = parseEther(amount);
+      } else {
+        parsedRaw = parseUnits(amount, currentSingleToken.decimals);
+      }
+
+      itemsToSweep = [
+        {
+          tokenAddress: currentSingleToken.address,
+          symbol: currentSingleToken.symbol,
+          decimals: currentSingleToken.decimals,
+          amount,
+          amountRaw: parsedRaw,
+          isNative: currentSingleToken.isNative,
+        },
+      ];
+    }
+
     setErrorMessage(null);
     setSweepStep('validating');
 
@@ -338,8 +594,7 @@ export function App() {
         kernelAddress: smartAccountAddress as Address,
         signerAddress,
         recipientAddress: targetRecipient as Address,
-        assetType,
-        amount,
+        items: itemsToSweep,
         gasMode,
         onStepChange: (step, msg) => {
           setSweepStep(step);
@@ -369,7 +624,7 @@ export function App() {
   const isValidSmartAccount = isAddress(smartAccountAddress);
   const targetRecipient = signerAddress || recipientAddress;
   const isValidRecipient = Boolean(targetRecipient && isAddress(targetRecipient));
-  const isValidAmount = parseFloat(amount) > 0;
+  const isValidSingleAmount = parseFloat(amount) > 0;
 
   return (
     <div className="app-container">
@@ -398,6 +653,19 @@ export function App() {
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        {/* Self-Funded Gas Notice Banner */}
+        <div className="gas-banner">
+          <div className="gas-banner-icon">
+            <Fuel size={16} />
+          </div>
+          <div className="gas-banner-content">
+            <span className="gas-banner-title">Self-Funded Recovery Gas</span>
+            <span className="gas-banner-desc">
+              Recovery transactions are executed directly on-chain from your Smart Account. Please ensure your Smart Account has a small balance of native <strong>{currentNetwork.nativeCurrency.symbol}</strong> (~$0.10) to cover network execution gas fees.
+            </span>
           </div>
         </div>
 
@@ -458,29 +726,114 @@ export function App() {
               )}
             </div>
 
-            {/* Available Balances */}
-            <div className="balances-box">
-              <div className="balance-item">
-                <span className="balance-label">USDC Balance</span>
-                <span className="balance-val">
-                  {balances ? `${balances.usdc} USDC` : '—'}
-                </span>
+            {/* Available Balances & Token Discovery */}
+            <div className="balances-box-multi">
+              <div className="balances-header-row">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Coins size={14} color="#783fe4" />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#344054' }}>
+                    Available Balances ({positiveTokens.length} active)
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowCustomTokenBox(!showCustomTokenBox)}
+                    className="btn-link"
+                    style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  >
+                    <PlusCircle size={12} />
+                    <span>{showCustomTokenBox ? 'Close' : 'Add Token'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={loadBalances}
+                    disabled={isLoadingBalances}
+                    className="balance-refresh-btn"
+                    title="Refresh balances"
+                  >
+                    <RefreshCw size={13} className={isLoadingBalances ? 'spin' : ''} />
+                  </button>
+                </div>
               </div>
-              <div className="balance-item">
-                <span className="balance-label">Native Gas</span>
-                <span className="balance-val">
-                  {balances ? `${parseFloat(balances.native).toFixed(4)} ${currentNetwork.nativeCurrency.symbol}` : '—'}
-                </span>
+
+              {/* Inline Custom Token Importer */}
+              {showCustomTokenBox && (
+                <div className="custom-token-box">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#475467' }}>
+                      Import Custom ERC-20 Token
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomTokenBox(false)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#667085' }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                  <div className="input-row">
+                    <input
+                      type="text"
+                      placeholder="0x... ERC-20 contract address"
+                      value={customTokenInput}
+                      onChange={(e) => setCustomTokenInput(e.target.value)}
+                      className="text-input mono"
+                      style={{ fontSize: 12 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomToken}
+                      disabled={isAddingToken || !customTokenInput.trim()}
+                      className="btn-primary"
+                      style={{ padding: '4px 10px', fontSize: 11 }}
+                    >
+                      {isAddingToken ? <Loader2 size={12} className="spin" /> : 'Inspect'}
+                    </button>
+                  </div>
+                  {customTokenError && (
+                    <span style={{ fontSize: 11, color: '#b91c1c' }}>{customTokenError}</span>
+                  )}
+                </div>
+              )}
+
+              {/* Detected Token Balances List */}
+              <div className="balances-tokens-grid">
+                {balances?.tokens && balances.tokens.length > 0 ? (
+                  balances.tokens
+                    .filter((t) => t.balanceRaw > 0n || t.isNative || t.symbol === 'USDC')
+                    .map((token) => {
+                      const key = token.address ? token.address.toLowerCase() : 'native';
+                      return (
+                        <div key={key} className="balance-token-row">
+                          <div className="balance-token-left">
+                            <span
+                              className={`token-badge ${
+                                token.isNative
+                                  ? 'token-badge-native'
+                                  : token.isCustom
+                                  ? 'token-badge-custom'
+                                  : ''
+                              }`}
+                            >
+                              {token.isNative ? 'NATIVE' : token.symbol}
+                            </span>
+                            <span style={{ fontWeight: 500, color: '#101828' }}>
+                              {token.name || token.symbol}
+                            </span>
+                          </div>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#101828' }}>
+                            {parseFloat(token.balance).toFixed(4)} {token.symbol}
+                          </span>
+                        </div>
+                      );
+                    })
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '12px', color: '#667085', fontSize: 12 }}>
+                    {isLoadingBalances ? 'Scanning on-chain token balances...' : 'No tokens detected yet.'}
+                  </div>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={loadBalances}
-                disabled={isLoadingBalances}
-                className="balance-refresh-btn"
-                title="Refresh balances"
-              >
-                <RefreshCw size={14} className={isLoadingBalances ? 'spin' : ''} />
-              </button>
             </div>
 
             {/* Recovery Signer Connection */}
@@ -552,50 +905,177 @@ export function App() {
               </h2>
             </div>
 
-            {/* Asset Selection */}
+            {/* Mode Switch: Batch vs Single */}
             <div className="field-group">
-              <label className="field-label">Asset to Sweep</label>
-              <div className="asset-toggle-group">
+              <label className="field-label">Recovery Mode</label>
+              <div className="mode-toggle-group">
                 <button
                   type="button"
-                  onClick={() => setAssetType('USDC')}
-                  className={`asset-toggle-btn ${assetType === 'USDC' ? 'active' : ''}`}
+                  onClick={() => setSweepMode('batch')}
+                  className={`mode-toggle-btn ${sweepMode === 'batch' ? 'active' : ''}`}
                 >
-                  USDC
+                  <Zap size={14} color="#783fe4" />
+                  <span>Batch Sweep (All Assets)</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAssetType('NATIVE')}
-                  className={`asset-toggle-btn ${assetType === 'NATIVE' ? 'active' : ''}`}
+                  onClick={() => setSweepMode('single')}
+                  className={`mode-toggle-btn ${sweepMode === 'single' ? 'active' : ''}`}
                 >
-                  Native ({currentNetwork.nativeCurrency.symbol})
+                  <Coins size={14} />
+                  <span>Single Asset</span>
                 </button>
               </div>
             </div>
 
-            {/* Amount */}
-            <div className="field-group">
-              <div className="field-label">
-                <span>Amount</span>
-                <button type="button" onClick={handleMaxAmount} className="btn-link">
-                  Sweep Max
-                </button>
+            {/* Batch Sweep UI */}
+            {sweepMode === 'batch' && (
+              <div className="field-group">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="field-label" style={{ margin: 0 }}>
+                    Select Assets to Sweep in 1 Transaction
+                  </span>
+                  {positiveTokens.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" onClick={handleSelectAllBatch} className="btn-link">
+                        Select All
+                      </button>
+                      <button type="button" onClick={handleDeselectAllBatch} className="btn-link">
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="batch-card">
+                  {positiveTokens.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '16px 8px', color: '#667085', fontSize: 12 }}>
+                      No positive balances found on {currentNetwork.name}. Use &ldquo;Add Token&rdquo; on the left if you have unlisted custom tokens.
+                    </div>
+                  ) : (
+                    <table className="batch-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: 32 }}></th>
+                          <th>Asset</th>
+                          <th style={{ textAlign: 'right' }}>Available</th>
+                          <th style={{ textAlign: 'right' }}>Sweep Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {positiveTokens.map((token) => {
+                          const key = token.address ? token.address.toLowerCase() : 'native';
+                          const isChecked = batchSelectedKeys.has(key);
+                          const sweepItem = batchSweepItems.find((i) =>
+                            token.isNative ? i.isNative : i.tokenAddress?.toLowerCase() === token.address?.toLowerCase()
+                          );
+
+                          return (
+                            <tr
+                              key={key}
+                              onClick={() => handleToggleBatchToken(key)}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td>
+                                {isChecked ? (
+                                  <CheckSquare size={16} color="#783fe4" />
+                                ) : (
+                                  <Square size={16} color="#98a2b3" />
+                                )}
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span style={{ fontWeight: 600, color: '#101828' }}>{token.symbol}</span>
+                                  <span style={{ fontSize: 11, color: '#667085' }}>
+                                    {token.isNative ? 'Native' : token.name || ''}
+                                  </span>
+                                </div>
+                              </td>
+                              <td style={{ textAlign: 'right', fontFamily: 'monospace' }}>
+                                {parseFloat(token.balance).toFixed(4)}
+                              </td>
+                              <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: '#047857' }}>
+                                {isChecked && sweepItem ? `${sweepItem.amount} ${token.symbol}` : '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+
+                  {batchSweepItems.length > 0 && (
+                    <div className="batch-summary-bar">
+                      <span>Ready to sweep:</span>
+                      <strong>{batchSweepItems.length} asset(s) simultaneously</strong>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="input-row">
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="text-input"
-                />
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#667085', paddingRight: 4 }}>
-                  {assetType === 'USDC' ? 'USDC' : currentNetwork.nativeCurrency.symbol}
-                </span>
-              </div>
-            </div>
+            )}
+
+            {/* Single Asset UI */}
+            {sweepMode === 'single' && (
+              <>
+                {/* Asset Selection */}
+                <div className="field-group">
+                  <label className="field-label">Asset to Sweep</label>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {balances?.tokens && balances.tokens.length > 0 ? (
+                      balances.tokens
+                        .filter((t) => t.balanceRaw > 0n || t.isNative || t.symbol === 'USDC')
+                        .map((token) => {
+                          const key = token.address ? token.address.toLowerCase() : 'native';
+                          const isSelected = selectedSingleKey === key;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => {
+                                setSelectedSingleKey(key);
+                                setAmount('');
+                              }}
+                              className={`network-pill ${isSelected ? 'active' : ''}`}
+                              style={{ padding: '6px 12px' }}
+                            >
+                              <span>{token.symbol}</span>
+                              <span style={{ opacity: 0.7, fontSize: 10 }}>
+                                ({parseFloat(token.balance).toFixed(2)})
+                              </span>
+                            </button>
+                          );
+                        })
+                    ) : (
+                      <span style={{ fontSize: 12, color: '#667085' }}>Loading tokens...</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Amount */}
+                <div className="field-group">
+                  <div className="field-label">
+                    <span>Amount</span>
+                    <button type="button" onClick={handleMaxAmount} className="btn-link">
+                      Sweep Max
+                    </button>
+                  </div>
+                  <div className="input-row">
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="text-input"
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#667085', paddingRight: 4 }}>
+                      {currentSingleToken?.symbol || ''}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Destination Recipient */}
             <div className="field-group">
@@ -611,12 +1091,21 @@ export function App() {
               </div>
             </div>
 
-            {gasMode === 'native' && balances && balances.nativeRaw === 0n && (
+            {balances && balances.nativeRaw === 0n && (
               <div className="alert-box alert-warning">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+                  <AlertTriangle size={15} /> Native Gas Required
+                </div>
                 <span>
-                  Smart account has <strong>0.00 {currentNetwork.nativeCurrency.symbol}</strong> for gas.
-                  Switch to <strong>ZeroDev Paymaster</strong> in Advanced Configuration below for sponsored gasless recovery.
+                  Smart account currently has <strong>0.00 {currentNetwork.nativeCurrency.symbol}</strong> for gas.
+                  Please send a small gas fee deposit (~$0.10 in {currentNetwork.nativeCurrency.symbol}) to your Smart Account address to pay for on-chain execution.
                 </span>
+              </div>
+            )}
+
+            {sweepMode === 'batch' && batchSweepItems.some((i) => i.isNative) && (
+              <div style={{ fontSize: 11, color: '#b45309', background: '#fffbeb', padding: '6px 10px', borderRadius: 6, border: '1px solid #fde68a' }}>
+                Note: In self-funded gas mode, ~0.001 {currentNetwork.nativeCurrency.symbol} is reserved in your smart account to pay bundler execution fees.
               </div>
             )}
 
@@ -671,6 +1160,15 @@ export function App() {
                 <span>
                   Transferred {sweepResult.amount} {sweepResult.asset} to {sweepResult.recipient.slice(0, 8)}...{sweepResult.recipient.slice(-6)}.
                 </span>
+                {sweepResult.sweptAssets && sweepResult.sweptAssets.length > 1 && (
+                  <ul style={{ margin: '6px 0 2px 18px', fontSize: 12 }}>
+                    {sweepResult.sweptAssets.map((a, i) => (
+                      <li key={i}>
+                        {a.amount} {a.symbol}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <a
                   href={sweepResult.explorerUrl}
                   target="_blank"
@@ -703,7 +1201,13 @@ export function App() {
               <button
                 type="button"
                 onClick={handleExecuteSweep}
-                disabled={!signerAddress || !isValidSmartAccount || !isValidRecipient || !isValidAmount || isExecuting}
+                disabled={
+                  !signerAddress ||
+                  !isValidSmartAccount ||
+                  !isValidRecipient ||
+                  (sweepMode === 'single' ? !isValidSingleAmount : batchSweepItems.length === 0) ||
+                  isExecuting
+                }
                 className="btn-sweep"
               >
                 {isExecuting ? (
@@ -715,12 +1219,21 @@ export function App() {
                   <span>Provide Smart Account in Recovery Link</span>
                 ) : !signerAddress ? (
                   <span>Connect Recovery Wallet to Sweep</span>
-                ) : !isValidAmount ? (
+                ) : sweepMode === 'batch' ? (
+                  batchSweepItems.length === 0 ? (
+                    <span>Select Assets to Sweep</span>
+                  ) : (
+                    <>
+                      <Zap size={16} />
+                      <span>Sign & Batch Sweep {batchSweepItems.length} Asset(s) in 1 Transaction</span>
+                    </>
+                  )
+                ) : !isValidSingleAmount ? (
                   <span>Enter Amount to Sweep</span>
                 ) : (
                   <>
                     <ArrowUpRight size={16} />
-                    <span>Sign & Sweep {amount} {assetType === 'USDC' ? 'USDC' : currentNetwork.nativeCurrency.symbol}</span>
+                    <span>Sign & Sweep {amount} {currentSingleToken?.symbol}</span>
                   </>
                 )}
               </button>
@@ -729,77 +1242,6 @@ export function App() {
         </div>
       </main>
 
-      {/* Subtle Advanced Settings Accordion */}
-      <details className="advanced-details">
-        <summary className="advanced-summary">
-          <Settings2 size={15} />
-          <span>Advanced Configuration (Custom RPC & Bundler)</span>
-        </summary>
-        <div className="advanced-content">
-          <div className="advanced-grid">
-            <div className="field-group">
-              <label className="field-label">Custom RPC URL</label>
-              <div className="input-row">
-                <input
-                  type="text"
-                  value={rpcUrl}
-                  onChange={(e) => setRpcUrl(e.target.value.trim())}
-                  placeholder={currentNetwork.rpcUrl}
-                  className="text-input mono"
-                />
-              </div>
-            </div>
-
-            <div className="field-group">
-              <label className="field-label">ERC-4337 Bundler URL</label>
-              <div className="input-row">
-                <input
-                  type="text"
-                  value={bundlerUrl}
-                  disabled
-                  placeholder="https://rpc.zerodev.app/api/v3/.../chain/..."
-                  className="text-input mono"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="field-group" style={{ marginTop: 12 }}>
-            <label className="field-label">ZeroDev Project ID (Bundler & Paymaster)</label>
-            <div className="input-row">
-              <input
-                type="text"
-                placeholder="Enter ZeroDev Project ID..."
-                value={zerodevProjectId}
-                disabled
-                className="text-input mono"
-              />
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-            <span style={{ fontSize: 12, fontWeight: 500, color: '#344054' }}>Gas Strategy:</span>
-            <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-              <input
-                type="radio"
-                name="gasMode"
-                checked={gasMode === 'paymaster'}
-                onChange={() => handleGasModeChange('paymaster')}
-              />
-              ZeroDev Paymaster (Gasless)
-            </label>
-            <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-              <input
-                type="radio"
-                name="gasMode"
-                checked={gasMode === 'native'}
-                onChange={() => handleGasModeChange('native')}
-              />
-              Self-Funded Native Gas
-            </label>
-          </div>
-        </div>
-      </details>
 
       {/* Clean Footer */}
       <footer className="footer">

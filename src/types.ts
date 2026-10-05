@@ -1,3 +1,10 @@
+export interface KnownToken {
+  address: `0x${string}`;
+  symbol: string;
+  name?: string;
+  decimals: number;
+}
+
 export interface NetworkConfig {
   id: number;
   name: string;
@@ -8,11 +15,31 @@ export interface NetworkConfig {
   usdcAddress: `0x${string}`;
   explorerUrl: string;
   isTestnet: boolean;
+  knownTokens?: KnownToken[];
 }
 
-export type AssetType = 'USDC' | 'NATIVE' | 'CUSTOM';
-
 export type GasMode = 'native' | 'paymaster';
+
+export type SweepMode = 'single' | 'batch';
+
+export interface TokenItem {
+  address: `0x${string}` | null; // null for native asset
+  symbol: string;
+  name: string;
+  decimals: number;
+  balance: string;
+  balanceRaw: bigint;
+  isNative: boolean;
+  isCustom?: boolean;
+}
+
+export interface AccountBalances {
+  native: string;
+  nativeRaw: bigint;
+  usdc: string;
+  usdcRaw: bigint;
+  tokens: TokenItem[];
+}
 
 export type SweepStep = 
   | 'idle'
@@ -24,6 +51,20 @@ export type SweepStep =
   | 'success'
   | 'error';
 
+export interface SweepItem {
+  tokenAddress: `0x${string}` | null;
+  symbol: string;
+  decimals: number;
+  amount: string;
+  amountRaw: bigint;
+  isNative: boolean;
+}
+
+export interface SweptAssetSummary {
+  symbol: string;
+  amount: string;
+}
+
 export interface SweepResult {
   txHash: string;
   userOpHash: string;
@@ -31,14 +72,5 @@ export interface SweepResult {
   amount: string;
   asset: string;
   recipient: string;
-}
-
-export interface AccountBalances {
-  native: string;
-  nativeRaw: bigint;
-  usdc: string;
-  usdcRaw: bigint;
-  custom?: string;
-  customRaw?: bigint;
-  customSymbol?: string;
+  sweptAssets?: SweptAssetSummary[];
 }
