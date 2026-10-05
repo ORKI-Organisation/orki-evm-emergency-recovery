@@ -329,13 +329,17 @@ export function App() {
     };
   }, [selectedChainId, rpcUrl, smartAccountAddress, extraTokens]);
 
+  const [hasExplicitlyDisconnected, setHasExplicitlyDisconnected] = useState(false);
+
   // Connect Wallet
-  const handleConnectWallet = async () => {
+  const handleConnectWallet = async (forceSelect = false) => {
     setIsConnectingWallet(true);
     setErrorMessage(null);
     try {
-      const address = await connectWallet();
+      const shouldForce = forceSelect || hasExplicitlyDisconnected;
+      const address = await connectWallet(shouldForce);
       setSignerAddress(address);
+      setHasExplicitlyDisconnected(false);
       if (!recipientAddress) {
         setRecipientAddress(address);
       }
@@ -352,6 +356,7 @@ export function App() {
 
   const handleDisconnectWallet = () => {
     setSignerAddress(null);
+    setHasExplicitlyDisconnected(true);
   };
 
   const handleSwitchChain = async () => {
@@ -542,6 +547,14 @@ export function App() {
     const targetRecipient = signerAddress || recipientAddress;
     if (!targetRecipient || !isAddress(targetRecipient)) {
       setError('Please connect your recovery signer wallet first.', 'Signer Required');
+      return;
+    }
+
+    if (gasMode === 'native' && balances && balances.nativeRaw === 0n) {
+      setError(
+        `Your smart account (${smartAccountAddress.slice(0, 8)}...) has 0 ${currentNetwork.nativeCurrency.symbol} for gas. Because recovery uses self-funded gas, please send a small amount of native ${currentNetwork.nativeCurrency.symbol} (e.g. 0.001 ${currentNetwork.nativeCurrency.symbol}) to your smart account address to pay for on-chain execution fees.`,
+        'Native Gas Required'
+      );
       return;
     }
 
@@ -846,7 +859,7 @@ export function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <button
                     type="button"
-                    onClick={handleConnectWallet}
+                    onClick={() => handleConnectWallet()}
                     disabled={isConnectingWallet}
                     className="btn-primary"
                     style={{ width: '100%' }}
@@ -864,14 +877,25 @@ export function App() {
                     <span className="status-badge-connected">
                       <CheckCircle2 size={12} /> Connected
                     </span>
-                    <button
-                      type="button"
-                      onClick={handleDisconnectWallet}
-                      className="btn-link"
-                      style={{ color: '#b91c1c', fontSize: 11 }}
-                    >
-                      Disconnect
-                    </button>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleConnectWallet(true)}
+                        className="btn-link"
+                        style={{ fontSize: 11, color: '#783fe4' }}
+                        title="Choose a different account in your wallet"
+                      >
+                        Switch Account
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDisconnectWallet}
+                        className="btn-link"
+                        style={{ color: '#b91c1c', fontSize: 11 }}
+                      >
+                        Disconnect
+                      </button>
+                    </div>
                   </div>
                   <div className="signer-address-text">{signerAddress}</div>
 
@@ -1206,7 +1230,8 @@ export function App() {
                   !isValidSmartAccount ||
                   !isValidRecipient ||
                   (sweepMode === 'single' ? !isValidSingleAmount : batchSweepItems.length === 0) ||
-                  isExecuting
+                  isExecuting ||
+                  (gasMode === 'native' && balances?.nativeRaw === 0n)
                 }
                 className="btn-sweep"
               >
@@ -1219,6 +1244,8 @@ export function App() {
                   <span>Provide Smart Account in Recovery Link</span>
                 ) : !signerAddress ? (
                   <span>Connect Recovery Wallet to Sweep</span>
+                ) : gasMode === 'native' && balances && balances.nativeRaw === 0n ? (
+                  <span>Native Gas Required to Sweep ({currentNetwork.nativeCurrency.symbol})</span>
                 ) : sweepMode === 'batch' ? (
                   batchSweepItems.length === 0 ? (
                     <span>Select Assets to Sweep</span>

@@ -31,13 +31,37 @@ export function getNetwork(chainId: number): NetworkConfig {
   return found;
 }
 
-export async function connectWallet(): Promise<Address> {
+export async function connectWallet(forceSelectAccount = false): Promise<Address> {
   if (typeof window === 'undefined' || !window.ethereum) {
     throw new Error('No Web3 wallet extension found (MetaMask, Rabby, Coinbase Wallet, etc.). Please install one.');
   }
-  const accounts = (await window.ethereum.request({
-    method: 'eth_requestAccounts',
-  })) as string[];
+
+  let accounts: string[] = [];
+
+  // If forceSelectAccount is requested, invoke EIP-2255 wallet_requestPermissions to trigger the wallet account selector
+  if (forceSelectAccount) {
+    try {
+      await window.ethereum.request({
+        method: 'wallet_requestPermissions',
+        params: [{ eth_accounts: {} }],
+      });
+      accounts = (await window.ethereum.request({
+        method: 'eth_accounts',
+      })) as string[];
+    } catch (error: unknown) {
+      const err = error as { code?: number };
+      if (err?.code === 4001) {
+        throw new Error('Account selection was cancelled in your wallet.');
+      }
+      console.warn('wallet_requestPermissions unsupported or failed, falling back to eth_requestAccounts:', error);
+    }
+  }
+
+  if (!accounts || accounts.length === 0) {
+    accounts = (await window.ethereum.request({
+      method: 'eth_requestAccounts',
+    })) as string[];
+  }
 
   if (!accounts || accounts.length === 0) {
     throw new Error('No accounts authorized in your wallet.');

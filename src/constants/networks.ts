@@ -87,6 +87,8 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
     isTestnet: true,
     knownTokens: [
       { address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', symbol: 'USDC', name: 'USD Coin (Testnet)', decimals: 6 },
+      { address: '0x808456652fdb597867f38412077A9182bf77359F', symbol: 'EURC', name: 'Euro Coin (Testnet)', decimals: 6 },
+      { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
     ],
   },
   {
@@ -113,6 +115,9 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
     isTestnet: true,
     knownTokens: [
       { address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', symbol: 'USDC', name: 'USD Coin (Testnet)', decimals: 6 },
+      { address: '0x08210F9170F89Ab7658F0B5E3fF39b0E03C594D4', symbol: 'EURC', name: 'Euro Coin (Testnet)', decimals: 6 },
+      { address: '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06', symbol: 'USDT', name: 'Tether USD (Testnet)', decimals: 6 },
+      { address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
     ],
   },
 ];
