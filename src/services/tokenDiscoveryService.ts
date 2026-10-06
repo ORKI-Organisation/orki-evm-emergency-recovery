@@ -1,15 +1,10 @@
 import { isAddress, type Address } from 'viem';
 
+// Only query chains with verified open Blockscout v2 APIs that permit public browser CORS
 const EXPLORER_API_ENDPOINTS: Record<number, string> = {
-  // Base
-  8453: 'https://base.blockscout.com/api/v2',
   84532: 'https://base-sepolia.blockscout.com/api/v2',
-  // Ethereum
-  1: 'https://eth.blockscout.com/api/v2',
   11155111: 'https://eth-sepolia.blockscout.com/api/v2',
-  // Polygon
-  137: 'https://polygon.blockscout.com/api/v2',
-  80002: 'https://polygon-amoy.blockscout.com/api/v2',
+  1: 'https://eth.blockscout.com/api/v2',
 };
 
 const STORAGE_PREFIX = 'orki_recovery_tokens_';
