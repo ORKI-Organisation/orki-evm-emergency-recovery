@@ -433,7 +433,7 @@ export function App() {
       }
       await loadBalances();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Failed to inspect token contract';
+      const msg = e instanceof Error ? e.message : 'Failed to import token contract';
       setCustomTokenError(msg);
     } finally {
       setIsAddingToken(false);
@@ -801,7 +801,7 @@ export function App() {
                       className="btn-primary"
                       style={{ padding: '4px 10px', fontSize: 11 }}
                     >
-                      {isAddingToken ? <Loader2 size={12} className="spin" /> : 'Inspect'}
+                      {isAddingToken ? <Loader2 size={12} className="spin" /> : 'Import'}
                     </button>
                   </div>
                   {customTokenError && (
