@@ -18,6 +18,7 @@ import {
   CheckSquare,
   Square,
   X,
+  ChevronDown,
 } from 'lucide-react';
 import { Header } from './components/Header';
 import {
@@ -157,6 +158,7 @@ export function App() {
   const [isAddingToken, setIsAddingToken] = useState(false);
   const [customTokenError, setCustomTokenError] = useState<string | null>(null);
   const [showCustomTokenBox, setShowCustomTokenBox] = useState(false);
+  const [showZeroBalances, setShowZeroBalances] = useState(false);
   const [isDiscoveringTokens, setIsDiscoveringTokens] = useState(false);
 
   // Wallet / Signer state
@@ -477,6 +479,19 @@ export function App() {
     return balances.tokens.filter((t) => t.balanceRaw > 0n);
   }, [balances]);
 
+  // Tokens with zero balance (excluding native and primary USDC)
+  const zeroTokens = useMemo(() => {
+    if (!balances?.tokens) return [];
+    return balances.tokens.filter((t) => t.balanceRaw === 0n && !t.isNative && t.symbol !== 'USDC');
+  }, [balances]);
+
+  // Displayed tokens according to zero-balance toggle
+  const displayedTokens = useMemo(() => {
+    if (!balances?.tokens) return [];
+    if (showZeroBalances) return balances.tokens;
+    return balances.tokens.filter((t) => t.balanceRaw > 0n || t.isNative || t.symbol === 'USDC');
+  }, [balances, showZeroBalances]);
+
   // Selected single token object
   const currentSingleToken = useMemo<TokenItem | undefined>(() => {
     if (!balances?.tokens) return undefined;
@@ -776,7 +791,7 @@ export function App() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Coins size={14} color="#783fe4" />
                   <span style={{ fontSize: 12, fontWeight: 600, color: '#344054' }}>
-                    Available Balances ({positiveTokens.length} active)
+                    Available Balances ({positiveTokens.length} active{balances?.tokens ? ` / ${balances.tokens.length} scanned` : ''})
                   </span>
                   {isDiscoveringTokens && (
                     <span
@@ -858,13 +873,17 @@ export function App() {
 
               {/* Detected Token Balances List */}
               <div className="balances-tokens-grid">
-                {balances?.tokens && balances.tokens.length > 0 ? (
-                  balances.tokens
-                    .filter((t) => t.balanceRaw > 0n || t.isNative || t.symbol === 'USDC')
-                    .map((token) => {
+                {displayedTokens.length > 0 ? (
+                  <>
+                    {displayedTokens.map((token) => {
                       const key = token.address ? token.address.toLowerCase() : 'native';
+                      const isZero = token.balanceRaw === 0n && !token.isNative && token.symbol !== 'USDC';
                       return (
-                        <div key={key} className="balance-token-row">
+                        <div
+                          key={key}
+                          className="balance-token-row"
+                          style={isZero ? { opacity: 0.65, background: '#fafafa' } : undefined}
+                        >
                           <div className="balance-token-left">
                             <span
                               className={`token-badge ${
@@ -877,16 +896,63 @@ export function App() {
                             >
                               {token.isNative ? 'NATIVE' : token.symbol}
                             </span>
-                            <span style={{ fontWeight: 500, color: '#101828' }}>
+                            <span style={{ fontWeight: 500, color: isZero ? '#475467' : '#101828' }}>
                               {token.name || token.symbol}
                             </span>
+                            {isZero && (
+                              <span style={{ fontSize: 10, color: '#98a2b3', marginLeft: 4 }}>
+                                (verified on-chain)
+                              </span>
+                            )}
                           </div>
-                          <span style={{ fontFamily: 'monospace', fontWeight: 600, color: '#101828' }}>
+                          <span
+                            style={{
+                              fontFamily: 'monospace',
+                              fontWeight: isZero ? 500 : 600,
+                              color: isZero ? '#667085' : '#101828',
+                            }}
+                          >
                             {parseFloat(token.balance).toFixed(4)} {token.symbol}
                           </span>
                         </div>
                       );
-                    })
+                    })}
+                    {zeroTokens.length > 0 && (
+                      <div style={{ marginTop: 8, display: 'flex', justifyContent: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => setShowZeroBalances(!showZeroBalances)}
+                          className="btn-link"
+                          style={{
+                            fontSize: 11,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            color: '#475467',
+                            background: '#f9fafb',
+                            padding: '5px 12px',
+                            borderRadius: 6,
+                            border: '1px solid #eaecf0',
+                            cursor: 'pointer',
+                            fontWeight: 500,
+                          }}
+                        >
+                          <ChevronDown
+                            size={13}
+                            style={{
+                              transform: showZeroBalances ? 'rotate(180deg)' : 'none',
+                              transition: 'transform 0.2s ease',
+                            }}
+                          />
+                          <span>
+                            {showZeroBalances
+                              ? `Hide ${zeroTokens.length} zero-balance verified tokens`
+                              : `Show ${zeroTokens.length} verified zero-balance tokens scanned`}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div style={{ textAlign: 'center', padding: '12px', color: '#667085', fontSize: 12 }}>
                     {isLoadingBalances || isDiscoveringTokens
