@@ -33,11 +33,17 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
     isTestnet: false,
     knownTokens: [
       { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', symbol: 'USDC', name: 'USD Coin', decimals: 6 },
+      { address: '0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA', symbol: 'USDbC', name: 'Bridged USD Coin', decimals: 6 },
       { address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', symbol: 'USDT', name: 'Tether USD', decimals: 6 },
       { address: '0x4200000000000000000000000000000000000006', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
       { address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', symbol: 'DAI', name: 'Dai Stablecoin', decimals: 18 },
       { address: '0x60a3E35Cc30DaA0070d69f89902Ce2D706380666', symbol: 'EURC', name: 'Euro Coin', decimals: 6 },
       { address: '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', symbol: 'cbBTC', name: 'Coinbase Wrapped BTC', decimals: 8 },
+      { address: '0x940181a94A35A4569E4529A3CDfB74e38FD98631', symbol: 'AERO', name: 'Aerodrome', decimals: 18 },
+      { address: '0x532f27101965dd16442E59d40670FaF5eBB142E4', symbol: 'BRETT', name: 'Brett', decimals: 18 },
+      { address: '0x4ed4E862860beEd5109412d0437aAc434b684446', symbol: 'DEGEN', name: 'Degen', decimals: 18 },
+      { address: '0xAC1Bd2486aAf3B5C0fc3Fd868558b082a531B2B4', symbol: 'TOSHI', name: 'Toshi', decimals: 18 },
+      { address: '0x0b3e328455c4059EEb9e3f84b5543F74E24e7E1b', symbol: 'VIRTUAL', name: 'Virtual Protocol', decimals: 18 },
     ],
   },
   {
@@ -56,6 +62,13 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
       { address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
       { address: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270', symbol: 'WPOL', name: 'Wrapped POL', decimals: 18 },
       { address: '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063', symbol: 'DAI', name: 'Dai Stablecoin', decimals: 18 },
+      { address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', symbol: 'WBTC', name: 'Wrapped BTC', decimals: 8 },
+      { address: '0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39', symbol: 'LINK', name: 'Chainlink', decimals: 18 },
+      { address: '0xb33EaAd8d922B1083446DC23f610c2567fB5180f', symbol: 'UNI', name: 'Uniswap', decimals: 18 },
+      { address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B', symbol: 'AAVE', name: 'Aave', decimals: 18 },
+      { address: '0xB5C064F955D8e7F38fE0460C556a72987494eE17', symbol: 'QUICK', name: 'QuickSwap', decimals: 18 },
+      { address: '0xBbba073C31bF03b8ACf7c28EF0738DeCF3695683', symbol: 'SAND', name: 'The Sandbox', decimals: 18 },
+      { address: '0x172370d5Cd63279eFa6d502DAB29171933a610AF', symbol: 'CRV', name: 'Curve DAO', decimals: 18 },
     ],
   },
   {
@@ -73,6 +86,14 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
       { address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', symbol: 'DAI', name: 'Dai Stablecoin', decimals: 18 },
       { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
       { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', symbol: 'WBTC', name: 'Wrapped BTC', decimals: 8 },
+      { address: '0x1aBaEA1f7C25db8950e251794277760314143ee0', symbol: 'EURC', name: 'Euro Coin', decimals: 6 },
+      { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', symbol: 'LINK', name: 'Chainlink', decimals: 18 },
+      { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', symbol: 'UNI', name: 'Uniswap', decimals: 18 },
+      { address: '0x6982508145454Ce325dDbE47a25d4ec3d2311933', symbol: 'PEPE', name: 'Pepe', decimals: 18 },
+      { address: '0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE', symbol: 'SHIB', name: 'Shiba Inu', decimals: 18 },
+      { address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9', symbol: 'AAVE', name: 'Aave', decimals: 18 },
+      { address: '0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2', symbol: 'MKR', name: 'Maker', decimals: 18 },
+      { address: '0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32', symbol: 'LDO', name: 'Lido DAO', decimals: 18 },
     ],
   },
   // Testnets
@@ -102,6 +123,7 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
     isTestnet: true,
     knownTokens: [
       { address: '0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582', symbol: 'USDC', name: 'USD Coin (Testnet)', decimals: 6 },
+      { address: '0x499d11E0b6eAC7c0593d4Fb292DCbBF815fb29Ae', symbol: 'WPOL', name: 'Wrapped POL (Testnet)', decimals: 18 },
     ],
   },
   {
@@ -118,6 +140,7 @@ export const SUPPORTED_NETWORKS: NetworkConfig[] = [
       { address: '0x08210F9170F89Ab7658F0B5E3fF39b0E03C594D4', symbol: 'EURC', name: 'Euro Coin (Testnet)', decimals: 6 },
       { address: '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06', symbol: 'USDT', name: 'Tether USD (Testnet)', decimals: 6 },
       { address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', symbol: 'WETH', name: 'Wrapped Ether', decimals: 18 },
+      { address: '0x3e622317f8C93f7328350cF0B56318C818527936', symbol: 'DAI', name: 'Dai Stablecoin (Testnet)', decimals: 18 },
     ],
   },
 ];

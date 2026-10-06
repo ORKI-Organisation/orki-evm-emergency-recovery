@@ -28,6 +28,11 @@ import {
   executeSweep,
   getNetwork,
 } from './services/recoveryService';
+import {
+  getStoredTokens,
+  saveStoredTokens,
+  discoverAccountTokens,
+} from './services/tokenDiscoveryService';
 import { SUPPORTED_NETWORKS, getZeroDevBundlerUrl, ENTRY_POINT_0_7, ZERODEV_PROJECT_ID } from './constants/networks';
 import { parseMetaMaskError, type FormattedError } from './utils/parseMetamaskError';
 import type { AccountBalances, GasMode, SweepItem, SweepMode, SweepResult, SweepStep, TokenItem } from './types';
@@ -152,6 +157,7 @@ export function App() {
   const [isAddingToken, setIsAddingToken] = useState(false);
   const [customTokenError, setCustomTokenError] = useState<string | null>(null);
   const [showCustomTokenBox, setShowCustomTokenBox] = useState(false);
+  const [isDiscoveringTokens, setIsDiscoveringTokens] = useState(false);
 
   // Wallet / Signer state
   const [signerAddress, setSignerAddress] = useState<Address | null>(null);
@@ -255,20 +261,27 @@ export function App() {
     };
   }, [smartAccountAddress, selectedChainId, handleSelectChainId]);
 
-  // Fetch balances
+  // Unified Hybrid Balance Fetcher:
+  // Step 1: Instant Multicall3 on all curated + stored custom tokens (sovereign, 0 API keys)
+  // Step 2: Opportunistic explorer indexer scan for any unlisted active token contracts
   const loadBalances = useCallback(async () => {
     if (!isAddress(smartAccountAddress)) return;
     setIsLoadingBalances(true);
+
+    const currentStored = getStoredTokens(selectedChainId, smartAccountAddress);
+    const combinedTokens = Array.from(
+      new Set([...extraTokens.map((t) => t.toLowerCase()), ...currentStored.map((s) => s.toLowerCase())])
+    ) as Address[];
+
     try {
       const bals = await fetchBalances(
         selectedChainId,
         rpcUrl,
         smartAccountAddress as Address,
-        extraTokens
+        combinedTokens
       );
       setBalances(bals);
 
-      // Initialize batch selection with all tokens that have non-zero balance
       const withBal = new Set<string>();
       bals.tokens.forEach((t) => {
         if (t.balanceRaw > 0n) {
@@ -277,7 +290,6 @@ export function App() {
       });
       setBatchSelectedKeys(withBal);
 
-      // Default single token selection
       const firstWithBal = bals.tokens.find((t) => t.balanceRaw > 0n);
       if (firstWithBal) {
         setSelectedSingleKey(firstWithBal.address ? firstWithBal.address.toLowerCase() : 'native');
@@ -287,47 +299,65 @@ export function App() {
     } finally {
       setIsLoadingBalances(false);
     }
+
+    // Background opportunistic token discovery via explorer indexers
+    try {
+      setIsDiscoveringTokens(true);
+      const discovered = await discoverAccountTokens(
+        selectedChainId,
+        smartAccountAddress as Address
+      );
+      if (discovered.length > 0) {
+        const knownSet = new Set(combinedTokens.map((e) => e.toLowerCase()));
+        const newlyDiscovered = discovered.filter((d) => !knownSet.has(d.toLowerCase()));
+
+        if (newlyDiscovered.length > 0) {
+          saveStoredTokens(selectedChainId, smartAccountAddress, newlyDiscovered);
+          setExtraTokens((prev) => {
+            const nextSet = new Set(prev.map((p) => p.toLowerCase()));
+            const additions = newlyDiscovered.filter((d) => !nextSet.has(d.toLowerCase()));
+            return additions.length > 0 ? [...prev, ...additions] : prev;
+          });
+
+          // Re-query Multicall3 with the newly discovered tokens included
+          const updatedBals = await fetchBalances(
+            selectedChainId,
+            rpcUrl,
+            smartAccountAddress as Address,
+            [...combinedTokens, ...newlyDiscovered]
+          );
+          setBalances(updatedBals);
+          const withBal = new Set<string>();
+          updatedBals.tokens.forEach((t) => {
+            if (t.balanceRaw > 0n) {
+              withBal.add(t.address ? t.address.toLowerCase() : 'native');
+            }
+          });
+          setBatchSelectedKeys(withBal);
+        }
+      }
+    } catch (e) {
+      console.debug('Opportunistic token discovery finished:', e);
+    } finally {
+      setIsDiscoveringTokens(false);
+    }
   }, [selectedChainId, rpcUrl, smartAccountAddress, extraTokens]);
 
   useEffect(() => {
     let ignore = false;
     if (!isAddress(smartAccountAddress)) return;
 
-    void (async () => {
-      setIsLoadingBalances(true);
-      try {
-        const bals = await fetchBalances(
-          selectedChainId,
-          rpcUrl,
-          smartAccountAddress as Address,
-          extraTokens
-        );
-        if (!ignore) {
-          setBalances(bals);
-          const withBal = new Set<string>();
-          bals.tokens.forEach((t) => {
-            if (t.balanceRaw > 0n) {
-              withBal.add(t.address ? t.address.toLowerCase() : 'native');
-            }
-          });
-          setBatchSelectedKeys(withBal);
-
-          const firstWithBal = bals.tokens.find((t) => t.balanceRaw > 0n);
-          if (firstWithBal) {
-            setSelectedSingleKey(firstWithBal.address ? firstWithBal.address.toLowerCase() : 'native');
-          }
-        }
-      } catch (e) {
-        console.warn('Error fetching balances:', e);
-      } finally {
-        if (!ignore) setIsLoadingBalances(false);
+    const timer = setTimeout(() => {
+      if (!ignore) {
+        void loadBalances();
       }
-    })();
+    }, 0);
 
     return () => {
       ignore = true;
+      clearTimeout(timer);
     };
-  }, [selectedChainId, rpcUrl, smartAccountAddress, extraTokens]);
+  }, [loadBalances, smartAccountAddress]);
 
   const [hasExplicitlyDisconnected, setHasExplicitlyDisconnected] = useState(false);
 
@@ -417,6 +447,7 @@ export function App() {
         smartAccountAddress as Address,
         raw as Address
       );
+      saveStoredTokens(selectedChainId, smartAccountAddress, [raw as Address]);
       setExtraTokens((prev) => {
         const existing = new Set(prev.map((p) => p.toLowerCase()));
         if (!existing.has(raw.toLowerCase())) {
@@ -747,6 +778,21 @@ export function App() {
                   <span style={{ fontSize: 12, fontWeight: 600, color: '#344054' }}>
                     Available Balances ({positiveTokens.length} active)
                   </span>
+                  {isDiscoveringTokens && (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: '#667085',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        marginLeft: 4,
+                      }}
+                    >
+                      <Loader2 size={11} className="spin" />
+                      <span>Scanning...</span>
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button
@@ -761,11 +807,11 @@ export function App() {
                   <button
                     type="button"
                     onClick={loadBalances}
-                    disabled={isLoadingBalances}
+                    disabled={isLoadingBalances || isDiscoveringTokens}
                     className="balance-refresh-btn"
-                    title="Refresh balances"
+                    title="Refresh balances & scan on-chain assets"
                   >
-                    <RefreshCw size={13} className={isLoadingBalances ? 'spin' : ''} />
+                    <RefreshCw size={13} className={isLoadingBalances || isDiscoveringTokens ? 'spin' : ''} />
                   </button>
                 </div>
               </div>
@@ -843,7 +889,9 @@ export function App() {
                     })
                 ) : (
                   <div style={{ textAlign: 'center', padding: '12px', color: '#667085', fontSize: 12 }}>
-                    {isLoadingBalances ? 'Scanning on-chain token balances...' : 'No tokens detected yet.'}
+                    {isLoadingBalances || isDiscoveringTokens
+                      ? 'Scanning on-chain token balances & activity...'
+                      : 'No tokens detected yet.'}
                   </div>
                 )}
               </div>
