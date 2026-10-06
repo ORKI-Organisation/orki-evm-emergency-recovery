@@ -57,9 +57,9 @@ code {
 }
 
 .app-container {
-  max-width: 960px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 32px 20px 48px;
+  padding: 32px 24px 48px;
 }
 
 /* Header */
@@ -127,7 +127,7 @@ code {
   font-size: 13px;
   color: var(--text-muted);
   line-height: 19px;
-  max-width: 600px;
+  max-width: 780px;
 }
 
 
